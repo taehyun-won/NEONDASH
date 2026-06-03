@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>NEON DASH — VERTIGO</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Space+Mono:wght@400;700&display=swap');
+  :root{
+    --bg0:#0a0612; --ink:#f4ecff;
+    --neon:#00f0ff; --neon2:#ff2d95; --gold:#ffd54a;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;background:var(--bg0);}
+  body{
+    display:flex;align-items:center;justify-content:center;
+    font-family:'Space Mono',monospace;color:var(--ink);
+    background:radial-gradient(120% 80% at 50% -10%, #2a0f55 0%, var(--bg0) 60%), var(--bg0);
+    user-select:none;-webkit-tap-highlight-color:transparent;
+  }
+  #stage{
+    display:flex;align-items:center;justify-content:center;
+    /* the whole panel spins as one rigid frame — driven by JS, not a loop */
+    /* snappy ease-out: fast launch, smooth settle = "whip" impact */
+    transition:transform 0.55s cubic-bezier(.16,1,.3,1);
+    will-change:transform;
+  }
+  #wrap{
+    position:relative;width:min(78vw,74vh,860px);aspect-ratio:16/9;
+    border-radius:18px;overflow:hidden;
+    box-shadow:0 0 0 1px rgba(0,240,255,.25), 0 30px 80px -20px rgba(0,240,255,.35), 0 0 120px -40px var(--neon2);
+    background:linear-gradient(180deg,#120726 0%, #0a0612 100%);
+  }
+  /* page-space overlay for warnings — always upright, fills the margin */
+  #overlayCv{
+    position:fixed;inset:0;width:100vw;height:100vh;
+    pointer-events:none;z-index:50;
+  }
+  #wrap canvas{display:block;width:100%;height:100%;}
+  .hud{position:absolute;inset:0;pointer-events:none;}
+  .score{position:absolute;top:18px;left:22px;font-family:'Orbitron',sans-serif;font-weight:900;font-size:clamp(20px,4vw,34px);letter-spacing:1px;color:var(--neon);text-shadow:0 0 18px rgba(0,240,255,.7);}
+  .best{position:absolute;top:24px;right:22px;font-size:clamp(10px,1.8vw,13px);letter-spacing:2px;color:rgba(244,236,255,.6);text-transform:uppercase;}
+  .best b{color:var(--gold);text-shadow:0 0 12px rgba(255,213,74,.6);}
+  .overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:rgba(8,4,18,.72);backdrop-filter:blur(6px);text-align:center;padding:16px;transition:opacity .25s;overflow:auto;}
+  .overlay.hide{opacity:0;pointer-events:none;}
+  .title{font-family:'Orbitron',sans-serif;font-weight:900;font-size:clamp(26px,6vw,54px);line-height:.95;letter-spacing:2px;background:linear-gradient(90deg,var(--neon),var(--neon2));-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 0 24px rgba(255,45,149,.45));}
+  .tag{font-family:'Orbitron',sans-serif;font-weight:700;letter-spacing:6px;font-size:clamp(12px,2.6vw,18px);color:var(--neon2);text-shadow:0 0 16px rgba(255,45,149,.6);}
+  .sub{font-size:clamp(12px,2.4vw,16px);letter-spacing:3px;text-transform:uppercase;color:rgba(244,236,255,.7);}
+  .key{display:inline-flex;align-items:center;gap:10px;margin-top:6px;padding:12px 22px;border:1px solid rgba(0,240,255,.5);border-radius:999px;font-family:'Orbitron',sans-serif;font-weight:700;letter-spacing:2px;color:var(--neon);box-shadow:0 0 24px -6px var(--neon) inset, 0 0 24px -8px var(--neon);animation:pulse 1.6s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{transform:scale(1);opacity:.85}50%{transform:scale(1.05);opacity:1}}
+  .final{font-family:'Orbitron',sans-serif;font-weight:700;font-size:clamp(16px,3vw,22px);color:var(--gold);text-shadow:0 0 16px rgba(255,213,74,.5);}
+  .deadtitle{font-family:'Orbitron',sans-serif;font-weight:900;font-size:clamp(28px,7vw,56px);color:var(--neon2);text-shadow:0 0 26px rgba(255,45,149,.6);letter-spacing:2px;}
+</style>
+</head>
+<body>
+<div id="stage">
+<div id="wrap">
+  <canvas id="c"></canvas>
+  <div class="hud" style="display:none">
+    <div class="score" id="score">0</div>
+    <div class="best">BEST&nbsp;<b id="best">0</b></div>
+  </div>
+  <div class="overlay" id="startScreen">
+    <div class="title">NEON DASH</div>
+    <div class="tag">CHAOS</div>
+    <div class="key" id="startKey">SPACE / TAP&nbsp;&nbsp;▶</div>
+    <div class="sub" style="font-size:11px;opacity:.6;margin-top:4px">press M to mute music</div>
+  </div>
+  <div class="overlay hide" id="deadScreen">
+    <div class="deadtitle">WIPEOUT</div>
+    <div class="final" id="finalScore">SCORE 0</div>
+    <div class="sub" id="newbest" style="display:none;color:var(--gold)">★ NEW BEST ★</div>
+    <div class="key" id="retryKey">SPACE / TAP&nbsp;&nbsp;↻</div>
+  </div>
+</div>
+</div>
+<canvas id="overlayCv"></canvas>
+
+<script>
+const cv=document.getElementById('c');const ctx=cv.getContext('2d');
+const scoreEl=document.getElementById('score');const bestEl=document.getElementById('best');
+const startScreen=document.getElementById('startScreen');const deadScreen=document.getElementById('deadScreen');
+const finalScore=document.getElementById('finalScore');const newbestEl=document.getElementById('newbest');
+
+// page-space overlay canvas (fills viewport, never rotates)
+const ocv=document.getElementById('overlayCv');const octx=ocv.getContext('2d');
+let OW=0,OH=0;
+function resizeOverlay(){
+  const r=window.devicePixelRatio||1;
+  OW=window.innerWidth;OH=window.innerHeight;
+  ocv.width=OW*r;ocv.height=OH*r;
+  octx.setTransform(r,0,0,r,0,0);
+}
+
+const W=860,H=484;
+function resize(){const r=window.devicePixelRatio||1;cv.width=W*r;cv.height=H*r;ctx.setTransform(r,0,0,r,0,0);}
+resize();resizeOverlay();
+addEventListener('resize',()=>{resize();resizeOverlay();if(typeof frameAngle!=='undefined'){frameScale=fitScaleFor(frameAngle);applyFrame();}});
+
+// ===== SOUND (Web Audio, no files) =====
+let actx=null;
+function initAudio(){
+  if(actx) return;
+  try{ actx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ actx=null; }
+}
+function blip(freq,dur,type,vol,slideTo){
+  if(!actx) return;
+  const now=actx.currentTime;
+  const o=actx.createOscillator();
+  const g=actx.createGain();
+  o.type=type||'square';
+  o.frequency.setValueAtTime(freq,now);
+  if(slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(1,slideTo),now+dur);
+  g.gain.setValueAtTime(0.0001,now);
+  g.gain.exponentialRampToValueAtTime(vol||0.18,now+0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001,now+dur);
+  o.connect(g).connect(actx.destination);
+  o.start(now);o.stop(now+dur+0.02);
+}
+function noise(dur,vol,lp){
+  if(!actx) return;
+  const now=actx.currentTime;
+  const n=Math.floor(actx.sampleRate*dur);
+  const buf=actx.createBuffer(1,n,actx.sampleRate);
+  const d=buf.getChannelData(0);
+  for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*(1-i/n);
+  const src=actx.createBufferSource();src.buffer=buf;
+  const g=actx.createGain();g.gain.value=vol||0.2;
+  const f=actx.createBiquadFilter();f.type='lowpass';f.frequency.value=lp||1200;
+  src.connect(f).connect(g).connect(actx.destination);
+  src.start(now);
+}
+const SFX={
+  jump(){ blip(420,0.16,'square',0.16,820); },
+  land(){ blip(180,0.10,'sine',0.14,110); },
+  warn(){ blip(660,0.08,'triangle',0.10,660); setTimeout(()=>blip(880,0.08,'triangle',0.10,880),90); },
+  spinFrame(){ noise(0.18,0.18,900); blip(300,0.22,'sawtooth',0.12,90); },
+  spinWorld(){ noise(0.16,0.16,1400); blip(520,0.22,'sawtooth',0.12,140); },
+  spinBoth(){ noise(0.22,0.22,1000); blip(240,0.28,'sawtooth',0.16,70); },
+  die(){ noise(0.5,0.3,1800); blip(200,0.5,'sawtooth',0.18,40); }
+};
+
+// ===== BACKGROUND MUSIC (looping synth, no files) =====
+let bgmOn=true, bgmTimer=null, bgmStep=0, bgmGain=null;
+// mysterious + driving: a minor/exotic scale with a syncopated arp
+// (harmonic-minor-ish flavor: includes the raised 7th for that "mystic" color)
+const ROOT=110; // A2
+const BASS =[0, 0, 7, 0,  -2, -2, 5, 7];           // driving root movement
+const ARP  =[12,19,24,19, 22,19,15,12,  20,15,12,8, 11,15,20,24]; // shimmering melody
+const PAD  =[0, 0, 0, 0,  3, 3, 3, 3];             // slow underlying chord shift
+function noteFreq(semi){ return ROOT*Math.pow(2,semi/12); }
+function vox(freq,dur,type,vol,dest,slideTo){
+  const now=actx.currentTime;
+  const o=actx.createOscillator(),g=actx.createGain();
+  o.type=type;o.frequency.setValueAtTime(freq,now);
+  if(slideTo)o.frequency.exponentialRampToValueAtTime(Math.max(1,slideTo),now+dur);
+  g.gain.setValueAtTime(0.0001,now);
+  g.gain.exponentialRampToValueAtTime(vol,now+0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001,now+dur);
+  o.connect(g).connect(dest);o.start(now);o.stop(now+dur+0.02);
+}
+function bgmTick(){
+  if(!actx||!bgmOn) return;
+  // bass on every step — punchy
+  vox(noteFreq(BASS[bgmStep%BASS.length]-12),0.20,'sawtooth',0.085,bgmGain,null);
+  // shimmering arp twice as fast (two notes per step) for energy
+  const ai=bgmStep*2;
+  vox(noteFreq(ARP[ai%ARP.length]),0.13,'square',0.05,bgmGain);
+  vox(noteFreq(ARP[(ai+1)%ARP.length]),0.13,'triangle',0.045,bgmGain);
+  // mysterious pad swell every 4 steps
+  if(bgmStep%4===0){
+    vox(noteFreq(PAD[bgmStep%PAD.length]),0.9,'sine',0.05,bgmGain);
+    vox(noteFreq(PAD[bgmStep%PAD.length]+7),0.9,'sine',0.035,bgmGain);
+  }
+  bgmStep++;
+}
+function startBGM(){
+  if(!actx||bgmTimer) return;
+  if(!bgmGain){ bgmGain=actx.createGain(); bgmGain.gain.value=0.5; bgmGain.connect(actx.destination); }
+  bgmStep=0;
+  bgmTimer=setInterval(bgmTick, 165);   // faster = more energetic
+}
+function toggleBGM(){
+  bgmOn=!bgmOn;
+  if(bgmGain) bgmGain.gain.value = bgmOn?0.5:0;
+}
+addEventListener('keydown',e=>{ if(e.code==='KeyM'){ toggleBGM(); } });
+
+// The world is drawn in its own coordinate space, then the whole canvas is rotated
+// about the player. Gravity & jump act along the world's "down"/"up", so when the
+// view rotates, the player's sense of up/down rotates with it -> vertigo.
+const FLOOR_Y=H-46;            // real floor, low on screen
+const CEIL_Y=120;              // ceiling near the top
+const GROUND_Y=FLOOR_Y;        // player's resting line = the floor
+const PLAYER_X=120;            // fixed horizontal position in world space
+let best=0;
+let state='start';
+let player,obstacles,particles,score,speed,spawnT,t,shakeT;
+let trail;   // recent player positions for the motion afterimage
+let combo,mult,fireworks;   // combo count, score multiplier, milestone firework particles
+let comboPulse=0;           // 0..1 momentary "thump" of the frame on each clear (decays)
+let comboGlowLvl=0;         // smoothed combo intensity 0..1 driving the edge glow
+let comboGlowRGB='0,240,255';  // current glow color (snaps to the active multiplier tier)
+let bgScroll;
+let frameAngle,spinT,warnT;   // frame-spin schedule timing
+let frameScale=1;                          // 1 normally; shrinks only while spun
+let viewAngle,targetView;                  // INNER world rotation (radians)
+let pendingMode;                           // 'frame' | 'world' | 'both' for queued spin
+let warnFrameDeg, warnWorldRad;            // queued amounts for each axis
+let doubleT, doubleAxis, doubleAmt;        // sequential 2nd hit of a DOUBLE spin
+// --- impact systems ---
+let hitstop;                               // frames of frozen time after a spin fires
+let flash;                                 // 0..1 white/color flash on the panel
+let flashCol;                              // color of the current flash
+let shocks;                                // expanding shockwave rings (page space)
+
+const stageEl=document.getElementById('stage');
+const wrapEl=document.getElementById('wrap');
+
+function reset(){
+  player={y:GROUND_Y,vy:0,r:20,onGround:true,rot:0,jumps:0,sx:1,sy:1};
+  trail=[];
+  obstacles=[];particles=[];
+  combo=0;mult=1;fireworks=[];
+  comboPulse=0;comboGlowLvl=0;comboGlowRGB='0,240,255';
+  score=0;speed=5.2;spawnT=0;t=0;shakeT=0;
+  bgScroll=0;
+  frameAngle=0;spinT=180;warnT=0;
+  frameScale=1;
+  viewAngle=0;targetView=0;
+  pendingMode='';warnFrameDeg=0;warnWorldRad=0;
+  doubleT=0;doubleAxis='';doubleAmt=0;
+  hitstop=0;flash=0;flashCol='#fff';shocks=[];
+  applyFrame();
+}
+
+// scale needed so the panel at angle `deg` fits the viewport (with margin)
+function fitScaleFor(deg){
+  if(!wrapEl) return 1;
+  const w=wrapEl.offsetWidth, h=wrapEl.offsetHeight;
+  if(!w||!h) return 1;
+  const r=Math.abs(deg)*Math.PI/180;
+  const c=Math.abs(Math.cos(r)), s=Math.abs(Math.sin(r));
+  // bounding box of the rotated rectangle
+  const bw=w*c+h*s, bh=w*s+h*c;
+  const margin=0.92; // small breathing room from the edges
+  const avW=window.innerWidth*margin, avH=window.innerHeight*margin;
+  return Math.min(1, avW/bw, avH/bh);
+}
+
+function applyFrame(){
+  if(stageEl) stageEl.style.transform='rotate('+frameAngle+'deg) scale('+frameScale+')';
+}
+function comboColor(){
+  // combo tier color: teal -> yellow -> pink as it climbs
+  return combo>=50?'255,45,149': combo>=20?'255,213,74':'0,240,255';
+}
+// multiplier tier -> glow intensity step + color (discrete, not per-combo)
+function glowTier(){
+  // returns {lvl:0..1, rgb:'r,g,b'} based on the current score multiplier
+  if(mult>=4)   return {lvl:1.00, rgb:'255,45,149'};   // x4  hot pink
+  if(mult>=3)   return {lvl:0.80, rgb:'255,90,31'};    // x3  orange-red
+  if(mult>=2.5) return {lvl:0.62, rgb:'255,213,74'};   // x2.5 yellow
+  if(mult>=2)   return {lvl:0.46, rgb:'138,92,255'};   // x2  violet
+  if(mult>=1.5) return {lvl:0.30, rgb:'0,240,255'};    // x1.5 cyan
+  return {lvl:0, rgb:'0,240,255'};                      // x1  no glow
+}
+// draw four symmetric radial glows in the page corners (overlay canvas = never rotates)
+function drawComboGlow(){
+  const L=comboGlowLvl;
+  if(L<0.01) return;
+  const rgb=comboGlowRGB;
+  const radius=Math.min(OW,OH)*(0.30+L*0.45);   // bigger reach, clearly visible
+  const peak=0.22+L*0.55;                        // stronger center alpha
+  octx.save();
+  octx.globalCompositeOperation='lighter';       // additive -> neon bloom
+  const corners=[[0,0],[OW,0],[0,OH],[OW,OH]];
+  for(const c of corners){
+    const g=octx.createRadialGradient(c[0],c[1],0, c[0],c[1],radius);
+    g.addColorStop(0,'rgba('+rgb+','+peak.toFixed(3)+')');
+    g.addColorStop(0.5,'rgba('+rgb+','+(peak*0.35).toFixed(3)+')');
+    g.addColorStop(1,'rgba('+rgb+',0)');
+    octx.fillStyle=g;
+    octx.fillRect(0,0,OW,OH);
+  }
+  octx.restore();
+}
+
+const GRAVITY=0.78, JUMP_V=-13.2, MAX_JUMPS=2;
+
+function jump(){
+  if(player.onGround||player.jumps<MAX_JUMPS){
+    player.vy=JUMP_V*(player.onGround?1:0.86);
+    player.onGround=false;player.jumps++;
+    // launch stretch: tall & thin as it springs up
+    player.sx=0.7; player.sy=1.4;
+    SFX.jump();
+    burstWorld(PLAYER_X,player.y+player.r,8,'#00f0ff');
+  }
+}
+function press(){
+  initAudio();
+  if(actx && actx.state==='suspended') actx.resume();
+  startBGM();
+  if(state==='start'){startGame();return;}
+  if(state==='dead'){if(t>12)startGame();return;}
+  jump();
+}
+function startGame(){reset();state='play';startScreen.classList.add('hide');deadScreen.classList.add('hide');}
+function die(){
+  state='dead';shakeT=18;
+  SFX.die();
+  combo=0;mult=1;
+  burstWorld(PLAYER_X,player.y,26,'#ff2d95');
+  const sc=Math.floor(score);finalScore.textContent='SCORE '+sc;
+  if(sc>best){best=sc;bestEl.textContent=best;newbestEl.style.display='block';}
+  else newbestEl.style.display='none';
+  deadScreen.classList.remove('hide');
+}
+addEventListener('keydown',e=>{if(e.code==='Space'||e.code==='ArrowUp'){e.preventDefault();press();}});
+addEventListener('pointerdown',e=>{e.preventDefault();press();},{passive:false});
+
+// particles live in WORLD space (so they rotate with the view)
+function burstWorld(x,y,n,color){
+  for(let i=0;i<n;i++){const a=Math.random()*Math.PI*2,sp=Math.random()*4+1;
+    particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-1,life:1,color});}
+}
+
+function spawn(){
+  const r=Math.random();
+  if(r<0.72){
+    const big=Math.random()<0.35;const h=big?64:40;const w=big?40:28;
+    obstacles.push({x:W+40,y:GROUND_Y-h+20,w,h,type:'spike',double:Math.random()<0.22});
+  }else{
+    obstacles.push({x:W+40,y:GROUND_Y-96,w:34,h:34,type:'orb'});
+  }
+}
+
+// fire ONE axis (frame or world) with its impact effects
+function fireAxis(axis,amt,heavy){
+  const col=(axis==='frame')?'#ffd54a':'#00f0ff';
+  if(axis==='frame'){
+    frameAngle+=amt;
+    frameScale=fitScaleFor(frameAngle);
+    applyFrame();
+    SFX.spinFrame();
+  }else{
+    targetView+=amt;
+    SFX.spinWorld();
+  }
+  hitstop=heavy?5:5;
+  spawnShock(col,false);
+  flash=heavy?0.95:0.8; flashCol=col;
+  shakeT=heavy?22:18;
+}
+
+// combo -> multiplier (gentle curve)
+function multForCombo(c){
+  if(c>=75) return 4;
+  if(c>=50) return 3;
+  if(c>=35) return 2.5;
+  if(c>=20) return 2;
+  if(c>=10) return 1.5;
+  return 1;
+}
+function onObstacleCleared(){
+  combo++;
+  // particle-free clear feedback: rising pitch (corner glow shows the building combo)
+  if(actx) blip(440+Math.min(combo,30)*14, 0.07, 'triangle', 0.08);
+  // multiplier milestone?
+  const nm=multForCombo(combo);
+  if(nm>mult){
+    mult=nm;
+    launchFireworks(mult);     // milestone celebration in the lower margin
+    if(actx){ SFX.warn(); }     // little fanfare
+  }
+}
+function spawnSparkle(){
+  // tiny burst near the player (world space) on each clear
+  for(let i=0;i<5;i++){
+    const a=Math.random()*Math.PI*2,sp=Math.random()*2+1;
+    particles.push({x:PLAYER_X,y:player.y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-1,life:1,color:'#9affff'});
+  }
+}
+
+function update(){
+  t++;
+  // decay visual-only impact effects every frame (independent of hitstop)
+  if(flash>0) flash=Math.max(0,flash-0.06);
+  // combo feedback: glow steps by MULTIPLIER TIER (drawn at screen corners)
+  const tier = glowTier();
+  const glowTarget = state==='play' ? tier.lvl : 0;
+  if(tier.lvl>0) comboGlowRGB = tier.rgb;   // snap color to the active tier
+  comboGlowLvl += (glowTarget-comboGlowLvl)*0.12;
+  stepShocks();
+  stepFireworks();
+
+  // HITSTOP: freeze the game sim briefly for a punchy "hit" feel
+  if(hitstop>0){ hitstop--; return; }
+
+  if(state!=='play'){stepParticles();if(shakeT>0)shakeT--;viewAngle+=(targetView-viewAngle)*0.16;return;}
+
+  speed+=0.0016;
+  score+=speed*0.05*mult;
+  scoreEl.textContent=Math.floor(score);
+
+  // physics along world axes (unaffected by view rotation)
+  player.vy+=GRAVITY;
+  player.y+=player.vy;
+  if(!player.onGround)player.rot+=0.16;
+  // ceiling bump
+  const ceilLimit=CEIL_Y+player.r;
+  if(player.y<ceilLimit){player.y=ceilLimit;if(player.vy<0)player.vy=0;player.sx=1.4;player.sy=0.7;burstWorld(PLAYER_X,player.y-player.r,5,'#ff2d95');}
+  if(player.y>=GROUND_Y){
+    player.y=GROUND_Y;
+    if(!player.onGround){
+      // landing squash scaled by impact speed
+      const impact=Math.min(1,player.vy/16);
+      player.sx=1+0.5*impact; player.sy=1-0.4*impact;
+      SFX.land();
+      burstWorld(PLAYER_X,player.y+player.r,6,'#ffd54a');player.rot=0;
+    }
+    player.vy=0;
+    player.onGround=true;player.jumps=0;
+  } else if(!player.onGround){
+    // in-air stretch follows vertical speed (tall when fast, round at apex)
+    const st=Math.max(-0.35,Math.min(0.35,-player.vy*0.02));
+    player.sy += ((1+st)-player.sy)*0.25;
+    player.sx += ((1-st)-player.sx)*0.25;
+  }
+  // relax scale back toward 1 (springy settle)
+  player.sx += (1-player.sx)*0.18;
+  player.sy += (1-player.sy)*0.18;
+
+  // motion trail: record current position, keep a short tail
+  trail.push({x:PLAYER_X,y:player.y});
+  if(trail.length>10) trail.shift();
+
+  // spawn
+  spawnT-=1;
+  if(spawnT<=0){spawn();const gap=Math.max(46,92-(speed-5.2)*5);spawnT=gap+Math.random()*30;}
+
+  for(const o of obstacles){
+    o.x-=speed;
+    if(hit(o)) die();
+    // passed: obstacle's right edge cleared the player and wasn't hit
+    if(!o.passed && o.x+o.w < PLAYER_X-player.r){
+      o.passed=true;
+      onObstacleCleared();
+    }
+  }
+  obstacles=obstacles.filter(o=>o.x>-80);
+
+  // --- MIXED SPIN: wait, telegraph, then fire frame / world / both ---
+  spinT-=1;
+  if(spinT<=0 && pendingMode==='' && warnT===0){
+    // choose what spins this time
+    const roll=Math.random();
+    if(roll<0.18) pendingMode='both';       // ~18% double spin
+    else if(roll<0.59) pendingMode='frame'; // frame (panel) turn
+    else pendingMode='world';               // inner world turn
+
+    const frameDegs=[-90,-45,45,90,180];
+    const worldRads=[-Math.PI/2,-Math.PI/3,Math.PI/3,Math.PI/2,Math.PI];
+    warnFrameDeg=frameDegs[(Math.random()*frameDegs.length)|0];
+    warnWorldRad=worldRads[(Math.random()*worldRads.length)|0];
+    warnT=46;
+    SFX.warn();
+  }
+  if(warnT>0){
+    warnT-=1;
+    if(warnT===0){
+      if(pendingMode==='both'){
+        // SEQUENTIAL DOUBLE: fire one axis NOW, queue the other right after
+        const frameFirst=Math.random()<0.5;
+        if(frameFirst){
+          fireAxis('frame',warnFrameDeg,true);
+          doubleAxis='world'; doubleAmt=warnWorldRad;
+        }else{
+          fireAxis('world',warnWorldRad,true);
+          doubleAxis='frame'; doubleAmt=warnFrameDeg;
+        }
+        doubleT=12;                         // ~0.2s gap -> rapid "bam-bam!"
+      }else if(pendingMode==='frame'){
+        fireAxis('frame',warnFrameDeg,false);
+      }else{
+        fireAxis('world',warnWorldRad,false);
+      }
+      pendingMode='';
+      spinT=130+Math.random()*320;          // more irregular idle (≈2.2s–7.5s)
+    }
+  }
+  // sequential second hit of a double spin
+  if(doubleT>0){
+    doubleT-=1;
+    if(doubleT===0){
+      fireAxis(doubleAxis,doubleAmt,true);
+      doubleAxis='';
+    }
+  }
+  // ease the inner world toward its target — snappy ease-out whip
+  viewAngle+=(targetView-viewAngle)*0.16;
+
+  stepParticles();
+  if(shakeT>0)shakeT--;
+}
+
+function spawnShock(col,heavy){
+  shocks.push({r:0,life:1,col});
+  if(heavy) shocks.push({r:0,life:1,col,delay:6}); // double pulse for DOUBLE
+}
+function stepShocks(){
+  for(const s of shocks){
+    if(s.delay>0){s.delay--;continue;}
+    s.r+=22; s.life-=0.045;
+  }
+  shocks=shocks.filter(s=>s.life>0);
+}
+
+// fireworks burst up from the lower margin (page/overlay space) at a milestone
+const FW_COLORS=['#00f0ff','#9affff','#ffd54a','#ff2d95','#8a5cff'];
+function launchFireworks(m){
+  // bigger multiplier -> more, faster, more colorful
+  const shells=Math.min(4, 1+Math.floor(m));
+  for(let s=0;s<shells;s++){
+    const n=24+Math.floor(m*8);
+    const power=4+m*1.2;
+    const spread=(Math.random()-0.5)*OW*0.4;   // horizontal launch offset from center
+    const col=FW_COLORS[(Math.random()*FW_COLORS.length)|0];
+    setTimeout(()=>{
+      for(let i=0;i<n;i++){
+        const a=Math.random()*Math.PI*2, sp=Math.random()*power+1.5;
+        fireworks.push({
+          x:OW/2+spread, y:OH*0.78,
+          vx:Math.cos(a)*sp, vy:Math.sin(a)*sp - 2,
+          life:1, col, size:Math.random()*2+1.5
+        });
+      }
+    }, s*120);
+  }
+}
+function stepFireworks(){
+  for(const f of fireworks){ f.x+=f.vx; f.y+=f.vy; f.vy+=0.12; f.vx*=0.99; f.life-=0.018; }
+  fireworks=fireworks.filter(f=>f.life>0);
+}
+
+function stepParticles(){
+  for(const p of particles){p.x+=p.vx;p.y+=p.vy;p.vy+=0.18;p.life-=0.03;}
+  particles=particles.filter(p=>p.life>0);
+}
+
+function hit(o){
+  // player circle center in world space
+  const px=PLAYER_X,py=player.y;
+  const cx=Math.max(o.x,Math.min(px,o.x+o.w));
+  const cy=Math.max(o.y,Math.min(py,o.y+o.h));
+  const dx=px-cx,dy=py-cy;
+  return dx*dx+dy*dy<(player.r*0.82)*(player.r*0.82);
+}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  let sx=0,sy=0;
+  if(shakeT>0){sx=(Math.random()-.5)*shakeT*0.8;sy=(Math.random()-.5)*shakeT*0.8;}
+
+  // COMBINED: the FRAME rotates via CSS (handled in update/applyFrame), and the
+  // INNER WORLD can also rotate here via viewAngle, pivoting about the player.
+  const pivotX=PLAYER_X, pivotY=GROUND_Y;     // fixed pivot = floor under player
+  const screenAnchorY=H*0.60;                 // map floor to 60% down (balanced spin)
+  ctx.save();
+  ctx.translate(sx,sy);
+  ctx.translate(W/2,screenAnchorY);
+  ctx.rotate(viewAngle);
+  ctx.translate(-pivotX,-pivotY);
+
+  drawBackground();
+
+  const REACH=Math.hypot(W,H);
+
+  // CEILING
+  ctx.fillStyle='#1a0c38';
+  ctx.fillRect(pivotX-REACH,CEIL_Y-REACH,REACH*2,REACH);
+  ctx.strokeStyle='rgba(255,45,149,.5)';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(pivotX-REACH,CEIL_Y);ctx.lineTo(pivotX+REACH,CEIL_Y);ctx.stroke();
+  ctx.strokeStyle='rgba(0,240,255,.22)';ctx.lineWidth=2;
+  for(let x=pivotX-REACH-bgScroll;x<pivotX+REACH;x+=60){ctx.beginPath();ctx.moveTo(x,CEIL_Y);ctx.lineTo(x+40,CEIL_Y-REACH);ctx.stroke();}
+
+  // FLOOR
+  const gy=GROUND_Y+player.r;
+  ctx.fillStyle='#1a0c38';
+  ctx.fillRect(pivotX-REACH,gy,REACH*2,REACH);
+  ctx.strokeStyle='rgba(0,240,255,.55)';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(pivotX-REACH,gy);ctx.lineTo(pivotX+REACH,gy);ctx.stroke();
+  bgScroll=(bgScroll+(state==='play'?speed:1))%60;
+  ctx.strokeStyle='rgba(255,45,149,.25)';ctx.lineWidth=2;
+  for(let x=pivotX-REACH-bgScroll;x<pivotX+REACH;x+=60){ctx.beginPath();ctx.moveTo(x,gy);ctx.lineTo(x-40,gy+REACH);ctx.stroke();}
+
+  for(const o of obstacles)drawObstacle(o);
+  drawPlayer();
+
+  for(const p of particles){ctx.globalAlpha=Math.max(0,p.life);ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x,p.y,3.2,0,7);ctx.fill();}
+  ctx.globalAlpha=1;
+  ctx.restore();
+
+  // subtle "horizon" vignette fixed to screen
+  drawTiltHint();
+
+  // FLASH impact — full-panel color burst at the moment of firing
+  if(flash>0){
+    ctx.save();
+    ctx.globalAlpha=flash*0.6;
+    ctx.fillStyle=flashCol;
+    ctx.fillRect(0,0,W,H);
+    ctx.globalAlpha=flash;
+    ctx.strokeStyle=flashCol;ctx.lineWidth=10;
+    ctx.strokeRect(4,4,W-8,H-8);
+    ctx.restore();
+  }
+}
+
+function drawOverlay(){
+  octx.clearRect(0,0,OW,OH);
+  drawComboGlow();   // combo intensity glow in the page corners (behind HUD/warnings)
+  const cx=OW/2, cy=OH/2;
+
+  // panel half-extents on screen (account for current frame scale)
+  const halfW=(wrapEl?wrapEl.offsetWidth*frameScale:600)/2;
+  const halfH=(wrapEl?wrapEl.offsetHeight*frameScale:340)/2;
+  const panelR=Math.hypot(halfW*2,halfH*2)/2;
+
+  // ===== FIREWORKS (milestone celebration) — always render when active =====
+  if(fireworks.length){
+    octx.save();
+    for(const f of fireworks){
+      octx.globalAlpha=Math.max(0,f.life);
+      octx.fillStyle=f.col;
+      octx.shadowColor=f.col;octx.shadowBlur=12;
+      octx.beginPath();octx.arc(f.x,f.y,f.size*f.life+0.5,0,Math.PI*2);octx.fill();
+    }
+    octx.restore();
+  }
+
+  // ===== SCORE + BEST — fixed to page, top (never rotates) =====
+  octx.save();
+  octx.textBaseline='alphabetic';
+  // score, big, top-center
+  octx.textAlign='center';
+  octx.fillStyle='#00f0ff';octx.shadowColor='#00f0ff';octx.shadowBlur=18;
+  octx.font='900 40px Orbitron, sans-serif';
+  octx.fillText(Math.floor(score), cx, 56);
+  // best, top-right
+  octx.textAlign='right';
+  octx.globalAlpha=0.85;
+  octx.fillStyle='#ffd54a';octx.shadowColor='#ffd54a';octx.shadowBlur=12;
+  octx.font='700 16px Orbitron, sans-serif';
+  octx.fillText('BEST '+best, OW-24, 40);
+  octx.restore();
+
+  // ===== COMBO HUD — fixed to page, top-left (never rotates) =====
+  if(state==='play' && combo>0){
+    const hot=Math.min(1,combo/75);
+    const ccol = combo>=50?'#ff2d95':combo>=20?'#ffd54a':'#00f0ff';
+    octx.save();
+    octx.textAlign='left';octx.textBaseline='alphabetic';
+    octx.shadowColor=ccol;octx.shadowBlur=16;
+    octx.fillStyle=ccol;
+    octx.font='900 '+(30+hot*16)+'px Orbitron, sans-serif';
+    octx.fillText(combo, 26, 64);
+    // "COMBO" label
+    octx.font='700 13px Orbitron, sans-serif';
+    octx.globalAlpha=0.8;
+    octx.fillText('COMBO', 28, 84);
+    // multiplier beside the combo number
+    if(mult>1){
+      octx.globalAlpha=1;
+      octx.font='900 '+(30+hot*16)+'px Orbitron, sans-serif';
+      const cw=octx.measureText(combo).width;
+      octx.fillStyle='#fff';octx.shadowColor=ccol;octx.shadowBlur=16;
+      octx.font='900 '+(24+hot*12)+'px Orbitron, sans-serif';
+      octx.fillText('×'+mult, 26+cw+16, 60);
+    }
+    octx.restore();
+  }
+
+  // ===== SHOCKWAVES (expanding rings) — render whenever active =====
+  if(shocks.length){
+    octx.save();
+    octx.translate(cx,cy);
+    for(const s of shocks){
+      if(s.delay>0) continue;
+      octx.globalAlpha=Math.max(0,s.life)*0.8;
+      octx.strokeStyle=s.col;
+      octx.lineWidth=6*s.life+1;
+      octx.shadowColor=s.col;octx.shadowBlur=24;
+      octx.beginPath();octx.arc(0,0,panelR+s.r,0,Math.PI*2);octx.stroke();
+    }
+    octx.restore();
+  }
+
+  // ===== WARNING (orbital ring + brackets) — only during telegraph =====
+  if(warnT<=0) return;
+
+  // mode -> color + label
+  let col,label;
+  if(pendingMode==='both'){col='#ff2d95';label='DOUBLE SPIN';}
+  else if(pendingMode==='frame'){col='#ffd54a';label='FRAME SPIN';}
+  else {col='#00f0ff';label='WORLD SPIN';}
+
+  // progress 0->1 across the warning window (warnT counts down from 46)
+  const WARN_MAX=46;
+  const p=1-(warnT/WARN_MAX);        // 0 at start, 1 at fire
+  const baseR=panelR+26;             // ring radius sits just outside the panel
+
+  octx.save();
+  octx.translate(cx,cy);
+
+  // ---- (1) ORBITAL RING: an arc that sweeps in the spin direction ----
+  const dir=(pendingMode==='world')?Math.sign(warnWorldRad):Math.sign(warnFrameDeg);
+  let mag;
+  if(pendingMode==='world') mag=Math.abs(warnWorldRad);
+  else mag=Math.abs(warnFrameDeg)*Math.PI/180;
+  if(pendingMode==='both') mag=Math.max(mag,Math.abs(warnFrameDeg)*Math.PI/180);
+  const arc=Math.max(0.9,mag);
+  const spin=t*0.06*dir;
+
+  octx.globalAlpha=0.18;
+  octx.strokeStyle=col;octx.lineWidth=3;
+  octx.beginPath();octx.arc(0,0,baseR,0,Math.PI*2);octx.stroke();
+
+  octx.globalAlpha=0.9;
+  octx.lineWidth=6;octx.lineCap='round';
+  octx.shadowColor=col;octx.shadowBlur=24;
+  const sweep=arc*(0.4+0.6*p);
+  const a0=spin;
+  const a1=a0+sweep*dir;
+  octx.beginPath();
+  octx.arc(0,0,baseR, a0, a1, dir<0);
+  octx.stroke();
+
+  const headA=a1;
+  const hx=Math.cos(headA)*baseR, hy=Math.sin(headA)*baseR;
+  const tang=headA+dir*Math.PI/2;
+  octx.shadowBlur=18;
+  octx.fillStyle=col;
+  octx.save();
+  octx.translate(hx,hy);octx.rotate(tang);
+  octx.beginPath();octx.moveTo(0,-11);octx.lineTo(16,0);octx.lineTo(0,11);octx.closePath();octx.fill();
+  octx.restore();
+
+  // ---- (1.5) GHOST PREVIEW: show the FINAL on-screen orientation ----
+  // The floor's on-screen angle = frame rotation (rad) + inner world rotation.
+  // We must use CUMULATIVE angles (current + this spin), not just the increment,
+  // so the ghost matches exactly what the viewer will see after the spin.
+  const ghostA=(0.25+0.35*p)*(0.7+0.3*Math.sin(t*0.3));
+  const curFrameRad=frameAngle*Math.PI/180;
+  // destination frame angle (deg) and inner world angle (rad) AFTER this spin
+  const destFrameDeg = frameAngle + ((pendingMode==='frame'||pendingMode==='both')?warnFrameDeg:0);
+  const destWorldRad = targetView + ((pendingMode==='world'||pendingMode==='both')?warnWorldRad:0);
+  const destFrameRad = destFrameDeg*Math.PI/180;
+  // total angle the floor/content will appear rotated by, to the viewer
+  const totalRad = destFrameRad + destWorldRad;
+
+  // (a) panel outline ghost — only meaningful when the FRAME moves
+  if(pendingMode==='frame'||pendingMode==='both'){
+    const sc=fitScaleFor(destFrameDeg);
+    const fcol='#ffd54a';
+    octx.save();
+    octx.rotate(destFrameRad);
+    octx.globalAlpha=ghostA;
+    octx.strokeStyle=fcol;octx.lineWidth=3;
+    octx.shadowColor=fcol;octx.shadowBlur=16;
+    octx.setLineDash([10,8]);
+    const gw=halfW*2*sc/frameScale, gh=halfH*2*sc/frameScale;
+    octx.strokeRect(-gw/2,-gh/2,gw,gh);
+    octx.setLineDash([]);
+    octx.restore();
+  }
+
+  // (b) FLOOR/UP ghost — shows where the ground will actually end up (viewer POV)
+  // color: yellow if frame-only, cyan if world involved, pink if both
+  {
+    const fcol = (pendingMode==='both')?'#ff7adf' : (pendingMode==='frame')?'#ffd54a' : '#00f0ff';
+    octx.save();
+    octx.rotate(totalRad);
+    // floor line sits low (like the real floor) within the panel footprint
+    const lineY=halfH*0.55;
+    const lineW=halfW*1.4;
+    octx.globalAlpha=ghostA+0.2;
+    octx.strokeStyle=fcol;octx.fillStyle=fcol;octx.shadowColor=fcol;octx.shadowBlur=16;
+    octx.lineWidth=4;octx.lineCap='round';
+    octx.beginPath();octx.moveTo(-lineW/2,lineY);octx.lineTo(lineW/2,lineY);octx.stroke();   // floor
+    octx.lineWidth=2;octx.globalAlpha=(ghostA+0.2)*0.7;
+    for(let x=-lineW/2;x<=lineW/2;x+=26){ octx.beginPath();octx.moveTo(x,lineY);octx.lineTo(x-10,lineY+14);octx.stroke(); } // ground hatch
+    octx.globalAlpha=ghostA+0.25;octx.lineWidth=4;
+    const upLen=halfH*0.6;
+    octx.beginPath();octx.moveTo(0,lineY);octx.lineTo(0,lineY-upLen);octx.stroke();          // up
+    octx.beginPath();octx.moveTo(0,lineY-upLen);octx.lineTo(-9,lineY-upLen+14);octx.lineTo(9,lineY-upLen+14);octx.closePath();octx.fill();
+    octx.restore();
+  }
+
+  // ---- (2) CORNER BRACKETS: close in toward the panel as time runs out ----
+  octx.shadowBlur=12;
+  octx.strokeStyle=col;octx.lineWidth=5;octx.lineCap='square';
+  const gap=70*(1-p)+14;
+  const L=34;
+  const bx=halfW+gap, by=halfH+gap;
+  const blink=(Math.floor(t/4)%2)===0?1:0.5;
+  octx.globalAlpha=0.95*blink;
+  drawBracket(-bx,-by, 1, 1, L);
+  drawBracket( bx,-by,-1, 1, L);
+  drawBracket(-bx, by, 1,-1, L);
+  drawBracket( bx, by,-1,-1, L);
+
+  // ---- label above the panel ----
+  octx.globalAlpha=0.95;
+  octx.shadowBlur=20;
+  octx.fillStyle=col;
+  octx.font='900 26px Orbitron, sans-serif';
+  octx.textAlign='center';octx.textBaseline='middle';
+  octx.fillText(label, 0, -(halfH+gap+40));
+
+  octx.restore();
+}
+
+function drawBracket(x,y,sx,sy,L){
+  octx.beginPath();
+  octx.moveTo(x+sx*L, y);
+  octx.lineTo(x, y);
+  octx.lineTo(x, y+sy*L);
+  octx.stroke();
+}
+
+function drawBackground(){
+  const REACH=Math.hypot(W,H);
+  // sky band between ceiling and floor
+  const top=CEIL_Y, bot=GROUND_Y;
+  const grd=ctx.createLinearGradient(0,top,0,bot);
+  grd.addColorStop(0,'rgba(0,240,255,0.06)');grd.addColorStop(1,'rgba(255,45,149,0.06)');
+  ctx.fillStyle='#0a0612';
+  ctx.fillRect(PLAYER_X-REACH,top,REACH*2,bot-top);
+  ctx.fillStyle=grd;ctx.fillRect(PLAYER_X-REACH,top,REACH*2,bot-top);
+  ctx.fillStyle='rgba(255,45,149,.16)';
+  ctx.beginPath();ctx.arc(W*0.72,(top+bot)/2,80,0,7);ctx.fill();
+}
+
+function drawPlayer(){
+  // motion trail: fading afterimages behind the player (skip when grounded & still)
+  if(trail.length>1 && !(player.onGround && Math.abs(player.vy)<0.1)){
+    const s=player.r;
+    for(let i=0;i<trail.length-1;i++){
+      const tp=trail[i];
+      const a=(i/trail.length)*0.28;       // older = fainter
+      const sc=0.6+0.4*(i/trail.length);   // older = smaller
+      ctx.save();
+      ctx.globalAlpha=a;
+      ctx.translate(tp.x,tp.y);
+      ctx.fillStyle='#00f0ff';
+      roundRect(-s*sc,-s*sc,s*2*sc,s*2*sc,6);ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  ctx.save();
+  ctx.translate(PLAYER_X,player.y);
+  ctx.rotate(player.rot);
+  // anchor squash/stretch at the feet so it doesn't float off the floor
+  const s=player.r;
+  ctx.translate(0,s);
+  ctx.scale(player.sx,player.sy);
+  ctx.translate(0,-s);
+  ctx.shadowColor='#00f0ff';ctx.shadowBlur=24;
+  ctx.fillStyle='#00f0ff';
+  roundRect(-s,-s,s*2,s*2,6);ctx.fill();
+  ctx.shadowBlur=0;
+  ctx.fillStyle='#0a0612';roundRect(-s*0.5,-s*0.5,s,s,4);ctx.fill();
+  ctx.fillStyle='#ff2d95';roundRect(-s*0.28,-s*0.28,s*0.56,s*0.56,3);ctx.fill();
+  ctx.restore();
+}
+
+function drawObstacle(o){
+  ctx.save();
+  if(o.type==='spike'){
+    ctx.shadowColor='#ff2d95';ctx.shadowBlur=18;ctx.fillStyle='#ff2d95';
+    ctx.beginPath();ctx.moveTo(o.x,o.y+o.h);ctx.lineTo(o.x+o.w/2,o.y);ctx.lineTo(o.x+o.w,o.y+o.h);ctx.closePath();ctx.fill();
+    if(o.double){ctx.beginPath();ctx.moveTo(o.x+o.w,o.y+o.h);ctx.lineTo(o.x+o.w+o.w/2,o.y+8);ctx.lineTo(o.x+o.w*2,o.y+o.h);ctx.closePath();ctx.fill();}
+  }else{
+    // hazard mine: orange-red body with radiating spikes (clearly NOT a coin)
+    const cx=o.x+o.w/2, cy=o.y+o.h/2, R=o.w/2;
+    ctx.shadowColor='#ff5a1f';ctx.shadowBlur=18;
+    ctx.fillStyle='#ff5a1f';
+    // spikes
+    const spikes=8;
+    ctx.beginPath();
+    for(let i=0;i<spikes;i++){
+      const a=(i/spikes)*Math.PI*2 + t*0.02;   // slow menacing rotation
+      ctx.moveTo(cx,cy);
+      ctx.lineTo(cx+Math.cos(a)*R*1.5, cy+Math.sin(a)*R*1.5);
+    }
+    ctx.lineWidth=5;ctx.strokeStyle='#ff5a1f';ctx.stroke();
+    // body
+    ctx.beginPath();ctx.arc(cx,cy,R,0,7);ctx.fill();
+    ctx.shadowBlur=0;
+    ctx.fillStyle='#0a0612';ctx.beginPath();ctx.arc(cx,cy,R*0.45,0,7);ctx.fill();
+    ctx.fillStyle='#ff5a1f';ctx.beginPath();ctx.arc(cx,cy,R*0.2,0,7);ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawTiltHint(){
+  // faint screen-space frame so player still has a stable reference
+  ctx.save();
+  ctx.strokeStyle='rgba(244,236,255,0.06)';ctx.lineWidth=1;
+  ctx.strokeRect(8,8,W-16,H-16);
+  ctx.restore();
+}
+
+function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+
+reset();
+function loop(){update();draw();drawOverlay();requestAnimationFrame(loop);}
+loop();
+</script>
+</body>
+</html>
